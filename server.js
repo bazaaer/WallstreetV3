@@ -4,6 +4,39 @@ const fs = require("fs");
 const path = require("path");
 const session = require("express-session");
 
+// ---------- Helpers to run .sql with DELIMITER blocks ----------
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Strips "DELIMITER X" lines and converts end-of-block X to ";" so MySQL server accepts it via mysql2
+function normalizeSqlForProgrammaticExecution(sql) {
+  let currentDelimiter = ";";
+  const lines = sql.split(/\r?\n/);
+  const out = [];
+
+  for (let line of lines) {
+    const m = line.match(/^\s*DELIMITER\s+(.+)\s*$/i);
+    if (m) {
+      currentDelimiter = m[1].trim();
+      continue; // drop the DELIMITER line itself
+    }
+
+    if (currentDelimiter !== ";") {
+      const endRe = new RegExp(`${escapeRegExp(currentDelimiter)}\\s*$`);
+      if (endRe.test(line.trim())) {
+        out.push(line.replace(endRe, ";"));
+      } else {
+        out.push(line);
+      }
+    } else {
+      out.push(line);
+    }
+  }
+
+  return out.join("\n");
+}
+
 const app = express();
 
 /* ---------------- ENV CHECKS ---------------- */
@@ -14,12 +47,83 @@ if (!process.env.MYSQL_URL) {
 
 /* ---------------- MIDDLEWARE ---------------- */
 app.use(express.json());
-
-// Trust the Railway proxy so secure cookies work in production
 app.set("trust proxy", 1);
+
+/* ---------------- MYSQL CONNECTION ---------------- */
+const { URL } = require("url");
+const u = new URL(process.env.MYSQL_URL);
+
+let db;
+(async () => {
+  try {
+    console.log("🔌 Attempting to connect to MySQL...");
+
+    // Step 1: raw connection (no DB selected) for schema execution
+    const rawConn = await mysql.createConnection({
+      host: u.hostname,
+      port: u.port ? Number(u.port) : 3306,
+      user: decodeURIComponent(u.username),
+      password: decodeURIComponent(u.password),
+      multipleStatements: true, // needed for executing full schema files
+    });
+
+    console.log("✅ MySQL connection established successfully");
+
+    // Step 2: optional schema construction
+    if (process.env.CONSTRUCT_DATABASE === "true") {
+      console.log("⚙️ CONSTRUCT_DATABASE=true — starting schema setup...");
+      try {
+        const sqlPath = path.join(__dirname, "SQL Script Wall Street Ding.sql");
+        let schemaSQL = fs.readFileSync(sqlPath, "utf8");
+        schemaSQL = normalizeSqlForProgrammaticExecution(schemaSQL);
+        await rawConn.query(schemaSQL);
+        console.log("✅ Database schema and initial data created successfully");
+      } catch (schemaErr) {
+        console.error("❌ Database setup failed during schema execution:", schemaErr.message);
+        console.error("📄 Check if the SQL file path or syntax is valid.");
+        process.exit(1);
+      }
+    } else {
+      console.log("ℹ️ CONSTRUCT_DATABASE not set — skipping schema setup");
+    }
+
+    // Step 3: app pool (select DB)
+    db = await mysql.createPool({
+      host: u.hostname,
+      port: u.port ? Number(u.port) : 3306,
+      user: decodeURIComponent(u.username),
+      password: decodeURIComponent(u.password),
+      database: u.pathname.replace(/^\//, ""),
+      waitForConnections: true,
+      connectionLimit: 10,
+      decimalNumbers: true,
+    });
+
+    console.log("✅ MySQL connection pool initialized — ready for queries");
+  } catch (connErr) {
+    console.error("❌ Failed to connect to MySQL at startup:");
+    console.error("   ↳ Host:", u.hostname);
+    console.error("   ↳ Port:", u.port || 3306);
+    console.error("   ↳ Error:", connErr.message);
+    console.error("📄 Tip: Check MYSQL_URL in Railway and ensure the DB is running.");
+    process.exit(1);
+  }
+})();
+
+/* ---------------- SESSIONS (MySQL-backed) ---------------- */
+const MySQLStore = require("express-mysql-session")(session);
+const sessionStore = new MySQLStore({
+  host: u.hostname,
+  port: u.port ? Number(u.port) : 3306,
+  user: decodeURIComponent(u.username),
+  password: decodeURIComponent(u.password),
+  database: u.pathname.replace(/^\//, ""),
+  // createDatabaseTable: true, // default true; uncomment if needed
+});
 
 app.use(
   session({
+    store: sessionStore,
     secret: process.env.SESSION_SECRET || "dev-only-secret",
     resave: false,
     saveUninitialized: false,
@@ -33,68 +137,6 @@ app.use(
 
 /* ---------------- FRONTEND ---------------- */
 app.use(express.static(path.join(__dirname, "public")));
-
-/* ---------------- MYSQL CONNECTION ---------------- */
-const { URL } = require("url");
-const u = new URL(process.env.MYSQL_URL);
-let db;
-
-(async () => {
-  try {
-    console.log("🔌 Attempting to connect to MySQL...");
-
-    // Step 1: Connect (no database selected yet)
-    const rawConn = await mysql.createConnection({
-      host: u.hostname,
-      port: u.port ? Number(u.port) : 3306,
-      user: decodeURIComponent(u.username),
-      password: decodeURIComponent(u.password),
-      multipleStatements: true,
-    });
-
-    console.log("✅ MySQL connection established successfully");
-
-    // Step 2: Construct schema if requested
-    if (process.env.CONSTRUCT_DATABASE === "true") {
-      console.log("⚙️ CONSTRUCT_DATABASE=true — starting schema setup...");
-
-      try {
-        const sqlPath = path.join(__dirname, "SQL Script Wall Street Ding.sql");
-        const schemaSQL = fs.readFileSync(sqlPath, "utf8");
-        await rawConn.query(schemaSQL);
-        console.log("✅ Database schema and initial data created successfully");
-      } catch (schemaErr) {
-        console.error("❌ Database setup failed during schema execution:", schemaErr.message);
-        console.error("📄 Check if the SQL file path or syntax is valid.");
-        process.exit(1);
-      }
-    } else {
-      console.log("ℹ️ CONSTRUCT_DATABASE not set — skipping schema setup");
-    }
-
-    // Step 3: Switch to pooled connection for app use
-    db = await mysql.createPool({
-      host: u.hostname,
-      port: u.port ? Number(u.port) : 3306,
-      user: decodeURIComponent(u.username),
-      password: decodeURIComponent(u.password),
-      database: u.pathname.replace(/^\//, ""),
-      waitForConnections: true,
-      connectionLimit: 10,
-      decimalNumbers: true,
-    });
-
-    console.log("✅ MySQL connection pool initialized — ready for queries");
-
-  } catch (connErr) {
-    console.error("❌ Failed to connect to MySQL at startup:");
-    console.error("   ↳ Host:", u.hostname);
-    console.error("   ↳ Port:", u.port || 3306);
-    console.error("   ↳ Error:", connErr.message);
-    console.error("📄 Tip: Check MYSQL_URL in Railway and ensure the DB is running.");
-    process.exit(1);
-  }
-})();
 
 /* ---------------- CONFIG ---------------- */
 const STIJGING = 5;
@@ -272,7 +314,7 @@ app.post("/login", async (req, res) => {
   }
 });
 
-app.get("/config", (req, res) => {
+app.get("/config", (_req, res) => {
   res.json({ interval: 10000 });
 });
 
