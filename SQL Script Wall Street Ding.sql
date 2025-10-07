@@ -36,7 +36,7 @@ CREATE TABLE drinks (
 INSERT INTO drinks (name, price, base_price, min_price, max_price, price_points, expected_popularity, locked, is_alcoholic) VALUES
 /*('Plat water', 1.30, 1.30, 1.30, 1.30, 130, 0.00, 1, 0),*/
 ('Bier', 2.50, 2.50, 2.00, 3.50, 250, 2, 0, 1),
-('Wijn (glas)', 3.50, 3.50, 3.00, 5.00, 350, 1, 0, 1),
+('Wijn', 3.50, 3.50, 3.00, 5.00, 350, 1, 0, 1),
 ('Desperado’s', 3.50, 3.50, 2.60, 4.50, 350, 1, 0, 1),
 ('Kasteelbier Rouge', 3.50, 3.50, 2.50, 4.50, 350, 1, 0, 1),
 ('Vodka Red Bull', 6.00, 6.00, 4.20, 7.50, 600, 1, 0, 1),
@@ -45,9 +45,7 @@ INSERT INTO drinks (name, price, base_price, min_price, max_price, price_points,
 ('Gin Tonic', 5.00, 5.00, 3.50, 6.50, 500, 1, 0, 1),
 ('Red Bull', 3.00, 3.00, 2.50, 4.00, 300, 1, 0, 0),
 ('Bruiswater', 1.80, 1.80, 1.30, 2.50, 180, 1, 0, 0),
-('Cola', 2.20, 2.20, 1.50, 3.00, 220, 1, 0, 0),
-('Fanta', 2.10, 2.10, 1.50, 3.00, 210, 1, 0, 0),
-('Ice Tea', 2.30, 2.30, 1.50, 3.20, 230, 1, 0, 0);
+('frisdrank',2.20,2.20,1.60,2.80,1,0,0);
 
 
 -- =========================================
