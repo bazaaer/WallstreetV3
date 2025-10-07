@@ -3,7 +3,6 @@ const mysql = require("mysql2/promise");
 const fs = require("fs");
 const path = require("path");
 const session = require("express-session");
-require("dotenv").config();
 
 const app = express();
 
@@ -21,11 +20,11 @@ app.set("trust proxy", 1);
 
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "dev-only-secret", // set SESSION_SECRET in Railway
+    secret: process.env.SESSION_SECRET || "dev-only-secret",
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: process.env.NODE_ENV === "production", // true on HTTPS (Railway)
+      secure: process.env.NODE_ENV === "production",
       httpOnly: true,
       sameSite: "lax",
     },
@@ -50,7 +49,7 @@ let db;
       port: u.port ? Number(u.port) : 3306,
       user: decodeURIComponent(u.username),
       password: decodeURIComponent(u.password),
-      multipleStatements: true, // needed for executing full SQL script
+      multipleStatements: true,
     });
 
     console.log("✅ MySQL connection established successfully");
@@ -96,7 +95,6 @@ let db;
     process.exit(1);
   }
 })();
-
 
 /* ---------------- CONFIG ---------------- */
 const STIJGING = 5;
