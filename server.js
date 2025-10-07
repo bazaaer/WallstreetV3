@@ -9,6 +9,13 @@ function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// ---------- Helpers to fix database name ----------
+function stripCreateDbAndUse(sql) {
+  return sql
+    .replace(/^\s*CREATE\s+DATABASE\b[^;]*;/gim, "")
+    .replace(/^\s*USE\b[^;]*;/gim, "");
+}
+
 // Strips "DELIMITER X" lines and converts end-of-block X to ";" so MySQL server accepts it via mysql2
 function normalizeSqlForProgrammaticExecution(sql) {
   let currentDelimiter = ";";
@@ -71,18 +78,28 @@ let db;
 
     // Step 2: optional schema construction
     if (process.env.CONSTRUCT_DATABASE === "true") {
-      console.log("⚙️ CONSTRUCT_DATABASE=true — starting schema setup...");
-      try {
-        const sqlPath = path.join(__dirname, "SQL Script Wall Street Ding.sql");
-        let schemaSQL = fs.readFileSync(sqlPath, "utf8");
-        schemaSQL = normalizeSqlForProgrammaticExecution(schemaSQL);
-        await rawConn.query(schemaSQL);
-        console.log("✅ Database schema and initial data created successfully");
-      } catch (schemaErr) {
-        console.error("❌ Database setup failed during schema execution:", schemaErr.message);
-        console.error("📄 Check if the SQL file path or syntax is valid.");
-        process.exit(1);
-      }
+    const dbName = u.pathname.replace(/^\//, "") || "railway";
+
+    console.log("⚙️ CONSTRUCT_DATABASE=true — starting schema setup...");
+    try {
+      // 2a) Ensure we’re in the DB from MYSQL_URL
+      await rawConn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\`; USE \`${dbName}\`;`);
+
+      // 2b) Load + normalize SQL (handle DELIMITER and strip CREATE/USE)
+      const sqlPath = path.join(__dirname, "SQL Script Wall Street Ding.sql");
+      let schemaSQL = fs.readFileSync(sqlPath, "utf8");
+      schemaSQL = normalizeSqlForProgrammaticExecution(schemaSQL);
+      schemaSQL = stripCreateDbAndUse(schemaSQL);
+
+      // 2c) Execute in the correct DB
+      await rawConn.query(schemaSQL);
+
+      console.log("✅ Database schema and initial data created successfully");
+    } catch (schemaErr) {
+      console.error("❌ Database setup failed during schema execution:", schemaErr.message);
+      console.error("📄 Check if the SQL file path or syntax is valid.");
+      process.exit(1);
+    }
     } else {
       console.log("ℹ️ CONSTRUCT_DATABASE not set — skipping schema setup");
     }
