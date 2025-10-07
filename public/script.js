@@ -6,7 +6,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const PRICE_HISTORY_WINDOW_MS = 3 * 60 * 60 * 1000;
   const PRICE_HISTORY_POINT_LIMIT = 1500;
   const FETCH_TIMEOUT_MS = 8_000;
-  const CRASH_START = "01:00";
+  const CRASH_START = "01:30";
   const CRASH_DURATION_MIN = 30;
 
   const COLORS = [
