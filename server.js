@@ -342,7 +342,8 @@ app.post("/logout", (req, res) => {
   });
 });
 
-app.get("/drinks", isLoggedIn, async (_req, res) => {
+// publiek:
+app.get("/drinks", async (_req, res) => {
   try {
     const [rows] = await db.query("SELECT * FROM drinks");
     res.json(rows);
@@ -350,6 +351,7 @@ app.get("/drinks", isLoggedIn, async (_req, res) => {
     res.status(500).json({ error: "Database query failed" });
   }
 });
+
 
 app.post("/simulate-buy/:id", isLoggedIn, async (req, res) => {
   const id = Number(req.params.id);
