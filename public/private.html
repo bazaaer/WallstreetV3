@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="nl">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Wall Street Party - Bar Controller</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        background: #111;
+        color: #fff;
+        padding: 20px;
+      }
+      h1 {
+        margin-bottom: 20px;
+        text-align: center;
+      }
+      .main-container {
+        display: flex;
+        gap: 30px;
+      }
+      #drinks-container {
+        flex: 2;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 20px;
+        justify-content: center;
+      }
+      .drink-button {
+        height: 120px;
+        font-size: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 3px solid #555;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+        color: #fff;
+        flex-direction: column;
+      }
+      .drink-button:hover {
+        filter: brightness(1.1);
+        border-color: #fff;
+      }
+      .price {
+        font-weight: bold;
+        font-size: 20px;
+        margin-top: 5px;
+      }
+      #order-container {
+        flex: 1;
+        background: #222;
+        padding: 15px;
+        border-radius: 12px;
+        min-width: 280px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      #order-list {
+        flex: 1;
+        margin-bottom: 15px;
+      }
+      .order-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 8px 0;
+        padding: 6px 8px;
+        border-radius: 6px;
+        background: #1a1a1a;
+      }
+      .order-item span {
+        margin: 0 5px;
+      }
+      .order-controls button {
+        background: #dc3545;
+        color: #fff;
+        border: none;
+        padding: 8px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 20px;
+        font-weight: bold;
+        margin-left: 6px;
+      }
+      .order-controls button:hover {
+        background: #b02a37;
+      }
+      #order-total {
+        font-size: 40px;
+        font-weight: bold;
+        margin: 12px 0;
+        text-align: right;
+      }
+      .order-actions button {
+        width: 100%;
+        padding: 12px;
+        font-size: 20px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        margin-top: 10px;
+      }
+      .confirm-btn {
+        background: #28a745;
+        color: white;
+      }
+      .reset-btn {
+        background: #6c757d;
+        color: white;
+      }
+      .highlight {
+        animation: flash 0.6s ease;
+      }
+      @keyframes flash {
+        0% {
+          background-color: #444;
+        }
+        30% {
+          background-color: #ffc107;
+          color: #000;
+        }
+        100% {
+          background-color: #1a1a1a;
+          color: #fff;
+        }
+      }
+      #login-container {
+        text-align: center;
+        margin-top: 80px;
+      }
+      #login-container input {
+        padding: 10px;
+        font-size: 18px;
+        border-radius: 6px;
+        border: none;
+        margin-right: 10px;
+      }
+      #login-container button {
+        padding: 10px 20px;
+        font-size: 18px;
+        border: none;
+        border-radius: 6px;
+        background: #28a745;
+        color: white;
+        cursor: pointer;
+      }
+      #login-container button:hover {
+        background: #218838;
+      }
+      #logout-container {
+        text-align: right;
+        margin-bottom: 20px;
+        display: none;
+      }
+      #logout-container button {
+        padding: 8px 16px;
+        font-size: 16px;
+        border-radius: 6px;
+        border: none;
+        background: #dc3545;
+        color: white;
+        cursor: pointer;
+      }
+      #logout-container button:hover {
+        background: #b02a37;
+      }
+      .refresh-info {
+        text-align: center;
+        margin: 10px 0;
+        color: #ccc;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Wall Street Party - Bar Controller</h1>
+
+    <!-- LOGIN -->
+    <div id="login-container">
+      <input type="password" id="password" placeholder="Wachtwoord" />
+      <button onclick="login()">Inloggen</button>
+      <p id="login-error" style="color: red; margin-top: 10px"></p>
+    </div>
+
+    <!-- LOGOUT -->
+    <div id="logout-container">
+      <button onclick="logout()">Uitloggen</button>
+      <div class="refresh-info">
+        Volgende prijsupdate: <span id="refresh-timer">--:--</span>
+      </div>
+    </div>
+
+    <!-- HOOFD PAGINA -->
+    <div id="main-content" style="display: none">
+      <div class="main-container">
+        <div id="drinks-container">Loading drinks...</div>
+        <div id="order-container">
+          <div id="order-list">Nog geen drankjes geselecteerd</div>
+          <div id="order-total">Totaal: €0.00</div>
+          <div class="order-actions">
+            <button class="confirm-btn" onclick="confirmOrder()">
+              ✅ Bestelling bevestigen
+            </button>
+            <button class="reset-btn" onclick="resetOrder()">
+              🔄 Nieuwe bestelling
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      let drinksCache = [];
+      let currentOrder = {};
+      let refreshIntervals = {};
+      const FETCH_INTERVAL = 30_000; // seconden
+      let nextRefreshTime = 0;
+      
+      const COLORS = [
+        "#e74c3c",
+        "#3498db",
+        "#2ecc71",
+        "#f39c12",
+        "#9b59b6",
+        "#1abc9c",
+        "#e67e22",
+        "#d35400",
+        "#7f8c8d",
+      ];
+
+      /**
+       * Bereken de volgende synchronisatietijd voor een interval
+       */
+      function getNextSyncTime(interval) {
+        const now = Date.now();
+        return Math.ceil(now / interval) * interval;
+      }
+
+      /**
+       * Start een interval gesynchroniseerd met echte tijd
+       */
+      function startRealTimeInterval(callback, interval) {
+        let stopped = false;
+        let timeoutId = null;
+        let intervalId = null;
+
+        const executeAndSchedule = () => {
+          if (stopped) return;
+          
+          // Volgende uitvoering op gesynchroniseerd tijdstip
+          const nextTime = getNextSyncTime(interval);
+          const delay = Math.max(0, nextTime - Date.now());
+          
+          timeoutId = setTimeout(() => {
+            if (stopped) return;
+            callback();
+            intervalId = setInterval(callback, interval);
+          }, delay);
+        };
+
+        executeAndSchedule();
+
+        return {
+          stop: () => {
+            stopped = true;
+            if (timeoutId !== null) clearTimeout(timeoutId);
+            if (intervalId !== null) clearInterval(intervalId);
+          }
+        };
+      }
+
+      // ===== REFRESH TIMER =====
+      function updateRefreshTimer() {
+        const timerEl = document.getElementById("refresh-timer");
+        if (!timerEl) return;
+        
+        const now = Date.now();
+        const remaining = Math.max(0, nextRefreshTime - now);
+        const seconds = Math.floor(remaining / 1000);
+        const sec = (seconds % 60).toString().padStart(2, "0");
+        const min = Math.floor(seconds / 60).toString().padStart(2, "0");
+        
+        timerEl.textContent = `${min}:${sec}`;
+        
+        requestAnimationFrame(updateRefreshTimer);
+      }
+
+      async function login() {
+        const password = document.getElementById("password").value;
+        console.log("[DEBUG] Inloggen gestart met wachtwoord:", password);
+
+        try {
+          console.log("[DEBUG] Verstuur POST request naar /login");
+          const res = await fetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ password }),
+          });
+
+          console.log("[DEBUG] Response ontvangen van server:", res);
+          const text = await res.text();
+          console.log("[DEBUG] Raw server response:", text);
+
+          let data;
+          try {
+            data = JSON.parse(text);
+            console.log("[DEBUG] JSON geparsed:", data);
+          } catch (parseErr) {
+            console.error("[DEBUG] JSON parsing mislukt:", parseErr);
+            alert("Server gaf geen geldig JSON antwoord");
+            return;
+          }
+
+          if (res.ok) {
+            console.log("[DEBUG] Login succesvol");
+            document.getElementById("login-container").style.display = "none";
+            document.getElementById("logout-container").style.display = "block";
+            document.getElementById("main-content").style.display = "block";
+            
+            // Start gesynchroniseerde intervals
+            nextRefreshTime = getNextSyncTime(FETCH_INTERVAL);
+            updateRefreshTimer();
+            
+            refreshIntervals.drinks = startRealTimeInterval(() => {
+              loadDrinks();
+              nextRefreshTime = getNextSyncTime(FETCH_INTERVAL);
+            }, FETCH_INTERVAL);
+            
+            // Eerste keer direct laden
+            loadDrinks();
+            
+          } else {
+            console.warn("[DEBUG] Login mislukt:", data);
+            document.getElementById("login-error").textContent =
+              data.error || "Login mislukt";
+          }
+        } catch (err) {
+          console.error("[DEBUG] Fout bij login request:", err);
+          document.getElementById("login-error").textContent =
+            "Server niet bereikbaar";
+        }
+      }
+
+      // ===== LOGOUT =====
+      async function logout() {
+        try {
+          const res = await fetch("/logout", {
+            method: "POST",
+            credentials: "include",
+          });
+          if (res.ok) {
+            // Stop alle intervals
+            if (refreshIntervals) {
+              Object.values(refreshIntervals).forEach(interval => interval.stop());
+            }
+            currentOrder = {};
+            drinksCache = [];
+            document.getElementById("main-content").style.display = "none";
+            document.getElementById("logout-container").style.display = "none";
+            document.getElementById("login-container").style.display = "block";
+            document.getElementById("login-error").textContent = "";
+          } else alert("Logout mislukt");
+        } catch (err) {
+          console.error(err);
+          alert("Server niet bereikbaar");
+        }
+      }
+
+      // ===== DRINKS LADEN =====
+      async function loadDrinks() {
+        try {
+          const res = await fetch("/drinks", { credentials: "include" });
+          if (!res.ok) throw new Error("Niet ingelogd of fout bij server");
+          const drinks = await res.json();
+          
+          drinksCache = drinks;
+
+          const container = document.getElementById("drinks-container");
+          container.innerHTML = "";
+          drinks.forEach((d, index) => {
+            const btn = document.createElement("button");
+            btn.className = "drink-button";
+            btn.id = `drink-btn-${d.id}`;
+            btn.style.backgroundColor = COLORS[index % COLORS.length];
+            
+            const price = parseFloat(d.price);
+            
+            btn.innerHTML = `
+              <div>${d.name}</div>
+              <div class="price">€${price.toFixed(2)}</div>
+            `;
+            btn.onclick = () => addToOrder(d);
+            container.appendChild(btn);
+          });
+
+          renderOrder();
+        } catch (err) {
+          console.error(err);
+          document.getElementById("drinks-container").textContent =
+            "Fout bij laden drankjes";
+        }
+      }
+
+      // ===== ADD TO ORDER =====
+      function addToOrder(drink) {
+        if (!currentOrder[drink.id]) currentOrder[drink.id] = { drink, qty: 0 };
+        currentOrder[drink.id].qty++;
+        renderOrder(drink.id);
+      }
+
+      // ===== CHANGE QUANTITY =====
+      function changeQty(id, delta) {
+        if (!currentOrder[id]) return;
+        currentOrder[id].qty += delta;
+        if (currentOrder[id].qty <= 0) delete currentOrder[id];
+        renderOrder(id);
+      }
+
+      // ===== RENDER ORDER =====
+      function renderOrder(highlightId = null) {
+        const orderList = document.getElementById("order-list");
+        const orderTotal = document.getElementById("order-total");
+        const ids = Object.keys(currentOrder);
+        if (!ids.length) {
+          orderList.textContent = "Nog geen drankjes geselecteerd";
+          orderTotal.textContent = "Totaal: €0.00";
+          return;
+        }
+        orderList.innerHTML = "";
+        let total = 0;
+        ids.forEach((id) => {
+          const { drink, qty } = currentOrder[id];
+          const item = document.createElement("div");
+          item.className = "order-item";
+          if (parseInt(id) === highlightId) item.classList.add("highlight");
+          const subtotal = qty * parseFloat(drink.price);
+          item.innerHTML = `<span>${
+            drink.name
+          } (x${qty})</span><span>€${subtotal.toFixed(2)}</span>`;
+          const controls = document.createElement("div");
+          controls.className = "order-controls";
+          controls.innerHTML = `<button onclick="changeQty(${drink.id}, -1)">-1</button>`;
+          item.appendChild(controls);
+          orderList.appendChild(item);
+          total += subtotal;
+        });
+        orderTotal.textContent = "Totaal: €" + total.toFixed(2);
+      }
+
+      // ===== CONFIRM ORDER =====
+      async function confirmOrder() {
+        const ids = Object.keys(currentOrder);
+        if (!ids.length) {
+          alert("Geen drankjes geselecteerd!");
+          return;
+        }
+
+        try {
+          for (const id of ids) {
+            const { qty } = currentOrder[id];
+            await fetch(`/simulate-buy/${id}?qty=${qty}`, {
+              method: "POST",
+              credentials: "include",
+            });
+          }
+          resetOrder();
+        } catch (err) {
+          console.error(err);
+          alert("Fout bij communicatie met server");
+        }
+      }
+
+      window.login = login;
+
+      // ===== RESET ORDER =====
+      function resetOrder() {
+        currentOrder = {};
+        renderOrder();
+      }
+    </script>
+  </body>
+</html>

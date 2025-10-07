@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wall Street Party - TV Dashboard</title>
+    <link rel="stylesheet" href="style.css" />
+
+    <!-- Chart.js + Luxon adapter -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;900&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <!-- Crash banner -->
+  <!-- Crash banner overlay -->
+  <div id="crash-banner">
+    <div class="content">
+      <h1>BEURS CRASH</h1>
+      <p>Alle drankjes nu aan <span class="price">€0.60</span></p>
+      <div class="crash-ticker">
+        <div class="ticker-inner">
+          ⚠️ ALLES AAN €0.60 ⚠️ | WALL STREET MELTDOWN | BUY BUY BUY!!! | ALLE
+          PRIJZEN GEDAALD NAAR 60 CENT | EXTRA COCKTAILBAR AAN DE PHOTOBOOTH
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <body>
+    <!-- <header>Wall Street Party</header> -->
+
+    <main class="tv-layout">
+      <!-- Linker 2/3: grafiek -->
+      <section class="chart-section">
+        <div class="chart-wrapper">
+          <h2 id="chart-drink-title">📊 Drink wordt geladen...</h2>
+          <canvas id="all-drinks-chart"></canvas>
+        </div>
+      </section>
+
+      <!-- Rechter 1/3: tabel -->
+      <section class="table-section">
+        <table id="cycle-drink-table">
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+
+    <!-- Countdown timer -->
+    <div id="refresh-timer-container">
+      Volgende update over: <span id="refresh-timer">--:--</span>
+    </div>
+
+    <!-- Ticker onderaan -->
+    <div class="ticker">
+      <div id="ticker-content"></div>
+    </div>
+    <script>
+      const MODE = "all";
+    </script>
+    <script src="cycle.js"></script>
+  </body>
+</html>
