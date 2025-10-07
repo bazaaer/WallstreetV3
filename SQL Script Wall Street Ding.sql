@@ -35,7 +35,7 @@ CREATE TABLE drinks (
 -- ================================================
 INSERT INTO drinks (name, price, base_price, min_price, max_price, price_points, expected_popularity, locked, is_alcoholic) VALUES
 /*('Plat water', 1.30, 1.30, 1.30, 1.30, 130, 0.00, 1, 0),*/
-('Bier', 2.50, 2.50, 2.00, 3.50, 250, 2, 1, 1),
+('Bier', 2.50, 2.50, 2.00, 3.50, 250, 2, 0, 1),
 ('Wijn (glas)', 3.50, 3.50, 3.00, 5.00, 350, 1, 0, 1),
 ('Desperado’s', 3.50, 3.50, 2.60, 4.50, 350, 1, 0, 1),
 ('Kasteelbier Rouge', 3.50, 3.50, 2.50, 4.50, 350, 1, 0, 1),
@@ -105,4 +105,4 @@ CREATE TABLE access_passwords (
     password VARCHAR(100) NOT NULL
 );
 
-INSERT INTO access_passwords (password) VALUES ('e');
+INSERT INTO access_passwords (password) VALUES ('6666');
