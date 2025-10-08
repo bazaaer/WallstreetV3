@@ -9,7 +9,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const PRICE_HISTORY_POINT_LIMIT = 1500;
   const FETCH_TIMEOUT_MS = 1_000;
   const CRASH_START = "01:30";
-  const CRASH_DURATION_MIN = 30;
+  const CRASH_DURATION_MIN = 15;
   const COLORS = [
     "#e6194b",
     "#3cb44b",
