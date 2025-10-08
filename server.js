@@ -4,44 +4,54 @@ const fs = require("fs");
 const path = require("path");
 const session = require("express-session");
 
-// ---------- Helpers to run .sql with DELIMITER blocks ----------
+/* ---------------- PRICE ENGINE CONFIG ---------------- */
+const SALES_WINDOW_MIN = 10;     // 10-minute lookback
+const TICK_MS = 30_000;          // update every 30s
+const TICK_LEAD_MS = 1_000;      // run ~1s before boundary so frontend sees fresh data
+
+// ---------- Helpers for schema execution ----------
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
-// ---------- Helpers to fix database name ----------
 function stripCreateDbAndUse(sql) {
   return sql
     .replace(/^\s*CREATE\s+DATABASE\b[^;]*;/gim, "")
     .replace(/^\s*USE\b[^;]*;/gim, "");
 }
-
-// Strips "DELIMITER X" lines and converts end-of-block X to ";" so MySQL server accepts it via mysql2
 function normalizeSqlForProgrammaticExecution(sql) {
   let currentDelimiter = ";";
   const lines = sql.split(/\r?\n/);
   const out = [];
-
   for (let line of lines) {
     const m = line.match(/^\s*DELIMITER\s+(.+)\s*$/i);
-    if (m) {
-      currentDelimiter = m[1].trim();
-      continue; // drop the DELIMITER line itself
-    }
-
+    if (m) { currentDelimiter = m[1].trim(); continue; }
     if (currentDelimiter !== ";") {
       const endRe = new RegExp(`${escapeRegExp(currentDelimiter)}\\s*$`);
-      if (endRe.test(line.trim())) {
-        out.push(line.replace(endRe, ";"));
-      } else {
-        out.push(line);
-      }
+      out.push(endRe.test(line.trim()) ? line.replace(endRe, ";") : line);
     } else {
       out.push(line);
     }
   }
-
   return out.join("\n");
+}
+
+// ---------- Aligned interval ticker ----------
+function startAlignedTicker(stepMs, fn, leadMs = 0) {
+  let running = false;
+  const scheduleNext = () => {
+    const now = Date.now();
+    const nextBoundary = Math.ceil(now / stepMs) * stepMs;
+    const firstDelay = Math.max(0, nextBoundary - leadMs - now);
+    setTimeout(async function tick() {
+      if (!running) {
+        running = true;
+        try { await fn(); } catch (e) { console.error("❌ Price tick failed:", e); }
+        finally { running = false; }
+      }
+      setTimeout(tick, stepMs - leadMs);
+    }, firstDelay);
+  };
+  scheduleNext();
 }
 
 const app = express();
@@ -60,51 +70,41 @@ app.set("trust proxy", 1);
 const { URL } = require("url");
 const u = new URL(process.env.MYSQL_URL);
 
-let db;
+let db; // pool (set after init)
+
 (async () => {
   try {
     console.log("🔌 Attempting to connect to MySQL...");
 
-    // Step 1: raw connection (no DB selected) for schema execution
     const rawConn = await mysql.createConnection({
       host: u.hostname,
       port: u.port ? Number(u.port) : 3306,
       user: decodeURIComponent(u.username),
       password: decodeURIComponent(u.password),
-      multipleStatements: true, // needed for executing full schema files
+      multipleStatements: true,
     });
-
     console.log("✅ MySQL connection established successfully");
 
-    // Step 2: optional schema construction
     if (process.env.CONSTRUCT_DATABASE === "true") {
-    const dbName = u.pathname.replace(/^\//, "") || "railway";
-
-    console.log("⚙️ CONSTRUCT_DATABASE=true — starting schema setup...");
-    try {
-      // 2a) Ensure we’re in the DB from MYSQL_URL
-      await rawConn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\`; USE \`${dbName}\`;`);
-
-      // 2b) Load + normalize SQL (handle DELIMITER and strip CREATE/USE)
-      const sqlPath = path.join(__dirname, "SQL Script Wall Street Ding.sql");
-      let schemaSQL = fs.readFileSync(sqlPath, "utf8");
-      schemaSQL = normalizeSqlForProgrammaticExecution(schemaSQL);
-      schemaSQL = stripCreateDbAndUse(schemaSQL);
-
-      // 2c) Execute in the correct DB
-      await rawConn.query(schemaSQL);
-
-      console.log("✅ Database schema and initial data created successfully");
-    } catch (schemaErr) {
-      console.error("❌ Database setup failed during schema execution:", schemaErr.message);
-      console.error("📄 Check if the SQL file path or syntax is valid.");
-      process.exit(1);
-    }
+      const dbName = u.pathname.replace(/^\//, "") || "railway";
+      console.log("⚙️ CONSTRUCT_DATABASE=true — starting schema setup...");
+      try {
+        await rawConn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\`; USE \`${dbName}\`;`);
+        const sqlPath = path.join(__dirname, "SQL Script Wall Street Ding.sql");
+        let schemaSQL = fs.readFileSync(sqlPath, "utf8");
+        schemaSQL = normalizeSqlForProgrammaticExecution(schemaSQL);
+        schemaSQL = stripCreateDbAndUse(schemaSQL);
+        await rawConn.query(schemaSQL);
+        console.log("✅ Database schema and initial data created successfully");
+      } catch (schemaErr) {
+        console.error("❌ Database setup failed during schema execution:", schemaErr.message);
+        console.error("📄 Check if the SQL file path or syntax is valid.");
+        process.exit(1);
+      }
     } else {
       console.log("ℹ️ CONSTRUCT_DATABASE not set — skipping schema setup");
     }
 
-    // Step 3: app pool (select DB)
     db = await mysql.createPool({
       host: u.hostname,
       port: u.port ? Number(u.port) : 3306,
@@ -115,8 +115,11 @@ let db;
       connectionLimit: 10,
       decimalNumbers: true,
     });
-
     console.log("✅ MySQL connection pool initialized — ready for queries");
+
+    // ---------- Start price engine (after pool is ready) ----------
+    startAlignedTicker(TICK_MS, recomputeAllPrices, TICK_LEAD_MS);
+
   } catch (connErr) {
     console.error("❌ Failed to connect to MySQL at startup:");
     console.error("   ↳ Host:", u.hostname);
@@ -135,214 +138,52 @@ const sessionStore = new MySQLStore({
   user: decodeURIComponent(u.username),
   password: decodeURIComponent(u.password),
   database: u.pathname.replace(/^\//, ""),
-  // createDatabaseTable: true, // default true; uncomment if needed
 });
-
-app.use(
-  session({
-    store: sessionStore,
-    secret: process.env.SESSION_SECRET || "dev-only-secret",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === "production",
-      httpOnly: true,
-      sameSite: "lax",
-    },
-  })
-);
+app.use(session({
+  store: sessionStore,
+  secret: process.env.SESSION_SECRET || "dev-only-secret",
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: process.env.NODE_ENV === "production", httpOnly: true, sameSite: "lax" },
+}));
 
 /* ---------------- FRONTEND ---------------- */
 app.use(express.static(path.join(__dirname, "public")));
 
-/* ---------------- CONFIG ---------------- */
-const STIJGING = 5;
-
-/* ---------------- HELPERS ---------------- */
-async function getTotalsByGroup() {
-  const [rows] = await db.query(`
-    SELECT is_alcoholic, COALESCE(SUM(ROUND(base_price * 100)),0) AS totaal
-    FROM drinks
-    WHERE locked = 0
-    GROUP BY is_alcoholic
-  `);
-
-  return rows.reduce(
-    (totals, r) => {
-      totals[r.is_alcoholic] = r.totaal;
-      return totals;
-    },
-    { 0: 0, 1: 0 }
-  );
-}
-
-function zeroSumUpdate(drinks, boughtId, qty = 1) {
-  let updated = drinks.map((d) => ({ ...d }));
-  const bought = updated.find((d) => d.id === boughtId);
-
-  if (!bought || bought.locked) return updated;
-
-  const group = bought.is_alcoholic;
-
-  // Bereken totaal voor deze groep (alleen unlocked drinks)
-  const unlockedInGroup = updated.filter(
-    (d) => d.is_alcoholic === group && !d.locked
-  );
-  const groupTotal = unlockedInGroup.reduce(
-    (sum, d) => sum + Math.round(d.base_price * 100),
-    0
-  );
-
-  // 📌 Stijging als percentage van base_price
-  const basePriceInCents = Math.round(bought.base_price * 100);
-  const increase = Math.round((basePriceInCents * STIJGING * qty) / 100);
-
-  // Popularity factor en modifier
-  const exp = bought.expected_popularity ?? 1;
-  const popularityFactor = 1 / (1 + (exp - 1) * 0.2);
-  const modifier = bought.modifier ?? 1;
-
-  const inc = Math.round(increase * popularityFactor * modifier);
-
-  // Pas prijs aan van gekochte drink
-  bought.price_points += inc;
-
-  // Alleen andere drankjes in dezelfde groep aanpassen
-  const others = updated.filter(
-    (d) => d.id !== boughtId && !d.locked && d.is_alcoholic === group
-  );
-
-  if (others.length > 0 && inc > 0) {
-    let share = Math.floor(inc / others.length);
-    let remainder = inc % others.length;
-
-    for (let d of others) {
-      let reduce = share + (remainder > 0 ? 1 : 0);
-      d.price_points = Math.max(0, d.price_points - reduce);
-      remainder--;
-    }
-  }
-
-  // Normaliseer TOTAAL voor deze groep
-  let currentTotal = updated
-    .filter((d) => d.is_alcoholic === group && !d.locked)
-    .reduce((sum, d) => sum + d.price_points, 0);
-
-  let adjust = groupTotal - currentTotal;
-
-  if (Math.abs(adjust) > 0) {
-    let targets = updated.filter(
-      (d) => !d.locked && d.is_alcoholic === group
-    );
-
-    if (targets.length > 0) {
-      let fix = Math.floor(adjust / targets.length);
-      let rest = adjust % targets.length;
-
-      for (let d of targets) {
-        d.price_points += fix + (rest > 0 ? 1 : 0);
-        rest--;
-      }
-    }
-  }
-
-  return updated;
-}
-
-/* ---------------- REBALANCE ---------------- */
-setInterval(async () => {
-  try {
-    const groupTotals = await getTotalsByGroup();
-
-    for (let group of [0, 1]) {
-      const [rows] = await db.query(
-        "SELECT SUM(price_points) AS totaal FROM drinks WHERE is_alcoholic=? AND locked=0",
-        [group]
-      );
-      const som = rows[0].totaal ?? 0;
-      const diff = som - groupTotals[group];
-
-      // Alleen rebalancen als het verschil significant is
-      if (Math.abs(diff) > 50) {
-        const [unlocked] = await db.query(
-          "SELECT id, price_points FROM drinks WHERE locked = 0 AND is_alcoholic=?",
-          [group]
-        );
-
-        if (unlocked.length > 0) {
-          const changePerDrink = Math.floor(Math.abs(diff) / unlocked.length);
-          let remainder = Math.abs(diff) % unlocked.length;
-
-          // Alleen rebalancen als de verandering per drink significant is
-          if (changePerDrink > 1) {
-            for (const d of unlocked) {
-              let change = changePerDrink + (remainder > 0 ? 1 : 0);
-              remainder--;
-              if (diff > 0) {
-                await db.query(
-                  "UPDATE drinks SET price_points = price_points - ? WHERE id = ?",
-                  [change, d.id]
-                );
-              } else {
-                await db.query(
-                  "UPDATE drinks SET price_points = price_points + ? WHERE id = ?",
-                  [change, d.id]
-                );
-              }
-            }
-            console.log(
-              `♻️ Rebalance uitgevoerd voor groep ${group}, som=${som}, verschil=${diff}, aanpassing=${changePerDrink} per drink`
-            );
-          } else {
-            console.log(
-              `ℹ️ Rebalance overgeslagen voor groep ${group} (te kleine aanpassing: ${changePerDrink})`
-            );
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.error("❌ Fout bij rebalance:", err);
-  }
-}, 5000);
+/* ---------------- CONFIG ENDPOINT (frontend timer alignment) ---------------- */
+app.get("/config", (_req, res) => {
+  const now = Date.now();
+  const nextTick = Math.ceil(now / TICK_MS) * TICK_MS;
+  res.json({ interval: TICK_MS, sales_window_min: SALES_WINDOW_MIN, next_tick: nextTick });
+});
 
 /* ---------------- AUTH ---------------- */
 function isLoggedIn(req, res, next) {
-  if (!req.session.loggedIn)
-    return res.status(401).json({ error: "Niet ingelogd" });
+  if (!req.session.loggedIn) return res.status(401).json({ error: "Niet ingelogd" });
   next();
 }
-
-/* ---------------- API ---------------- */
 app.post("/login", async (req, res) => {
   const { password } = req.body;
   try {
     const [rows] = await db.query(
-      "SELECT * FROM access_passwords WHERE password = ? LIMIT 1",
+      "SELECT 1 FROM access_passwords WHERE password = ? LIMIT 1",
       [password]
     );
-    if (rows.length === 0)
-      return res.status(401).json({ error: "Ongeldig wachtwoord" });
-
+    if (rows.length === 0) return res.status(401).json({ error: "Ongeldig wachtwoord" });
     req.session.loggedIn = true;
     res.json({ success: true });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "DB error" });
   }
 });
-
-app.get("/config", (_req, res) => {
-  res.json({ interval: 10000 });
-});
-
 app.post("/logout", (req, res) => {
-  req.session.destroy((err) => {
+  req.session.destroy(err => {
     if (err) return res.status(500).json({ error: "Logout failed" });
     res.json({ success: true });
   });
 });
 
-// publiek:
+/* ---------------- PUBLIC DATA ---------------- */
 app.get("/drinks", async (_req, res) => {
   try {
     const [rows] = await db.query("SELECT * FROM drinks");
@@ -351,124 +192,6 @@ app.get("/drinks", async (_req, res) => {
     res.status(500).json({ error: "Database query failed" });
   }
 });
-
-
-app.post("/simulate-buy/:id", isLoggedIn, async (req, res) => {
-  const id = Number(req.params.id);
-  const qty = Number(req.query.qty || 1);
-
-  const conn = await db.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    // Lock de drinks tabel voor consistentie
-    const [drinks] = await conn.query("SELECT * FROM drinks FOR UPDATE");
-
-    // Debug logging
-    console.log(`🛒 Aankoop: drink ${id}, hoeveelheid: ${qty}`);
-    console.log(
-      `📊 Voor aankoop prijzen:`,
-      drinks.map((d) => ({
-        id: d.id,
-        name: d.name,
-        price: d.price,
-        price_points: d.price_points,
-      }))
-    );
-
-    const updated = zeroSumUpdate(drinks, id, qty);
-
-    // Update de database
-    for (const u of updated) {
-      await conn.query(
-        "UPDATE drinks SET price_points = ?, price = ? WHERE id = ?",
-        [u.price_points, u.price_points / 100, u.id]
-      );
-    }
-
-    await conn.commit();
-
-    // Debug logging na update
-    const [afterUpdate] = await conn.query(
-      "SELECT * FROM drinks WHERE id = ?",
-      [id]
-    );
-    console.log(`💰 Na aankoop:`, afterUpdate[0]);
-
-    const bought = updated.find((u) => u.id === id);
-    res.json({
-      success: true,
-      boughtPrice: bought.price_points / 100,
-      qty,
-      newPrices: updated.map((u) => ({
-        id: u.id,
-        price: u.price_points / 100,
-      })),
-    });
-  } catch (err) {
-    await conn.rollback();
-    console.error("❌ Fout bij aankoop:", err);
-    res.status(500).json({ error: "Update mislukt" });
-  } finally {
-    conn.release();
-  }
-});
-
-// Log a sale (single item). Protected for now; change to public if needed.
-app.post("/sales", isLoggedIn, async (req, res) => {
-  try {
-    const { drink_id, qty } = req.body || {};
-
-    const idNum = Number(drink_id);
-    const qtyNum = Number(qty ?? 1);
-
-    if (!Number.isInteger(idNum) || idNum <= 0) {
-      return res.status(400).json({ error: "Invalid drink_id" });
-    }
-    if (!Number.isInteger(qtyNum) || qtyNum <= 0) {
-      return res.status(400).json({ error: "Invalid qty" });
-    }
-
-    // Ensure drink exists (optional but nice)
-    const [[exists]] = await db.query("SELECT id FROM drinks WHERE id=? LIMIT 1", [idNum]);
-    if (!exists) {
-      return res.status(404).json({ error: "Drink not found" });
-    }
-
-    // Insert sale (server time). No price changes here.
-    await db.query(
-      "INSERT INTO sales (drink_id, qty, ts) VALUES (?, ?, NOW())",
-      [idNum, qtyNum]
-    );
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("❌ Failed to log sale:", err);
-    res.status(500).json({ error: "Failed to log sale" });
-  }
-});
-
-
-app.post("/set-price/:id", isLoggedIn, async (req, res) => {
-  const id = Number(req.params.id);
-  const { price } = req.body;
-  if (typeof price !== "number" || Number.isNaN(price)) {
-    return res.status(400).json({ error: "Ongeldige prijs" });
-  }
-
-  try {
-    const price_points = Math.round(price * 100);
-    await db.query("UPDATE drinks SET price=?, price_points=? WHERE id=?", [
-      price,
-      price_points,
-      id,
-    ]);
-    res.json({ success: true, price });
-  } catch {
-    res.status(500).json({ error: "Failed to set price" });
-  }
-});
-
 app.get("/market", async (_req, res) => {
   try {
     const [rows] = await db.query("SELECT * FROM market_status WHERE id=1");
@@ -478,6 +201,7 @@ app.get("/market", async (_req, res) => {
   }
 });
 
+/* ---------------- ADMIN / MUTATION ---------------- */
 app.post("/market/crash/:state", isLoggedIn, async (req, res) => {
   const state = req.params.state === "true" ? 1 : 0;
   try {
@@ -487,16 +211,122 @@ app.post("/market/crash/:state", isLoggedIn, async (req, res) => {
     res.status(500).json({ error: "Failed to update market" });
   }
 });
+app.post("/set-price/:id", isLoggedIn, async (req, res) => {
+  const id = Number(req.params.id);
+  const { price } = req.body;
+  if (typeof price !== "number" || Number.isNaN(price)) {
+    return res.status(400).json({ error: "Ongeldige prijs" });
+  }
+  try {
+    const price_points = Math.round(price * 100);
+    await db.query("UPDATE drinks SET price=?, price_points=? WHERE id=?", [price, price_points, id]);
+    res.json({ success: true, price });
+  } catch {
+    res.status(500).json({ error: "Failed to set price" });
+  }
+});
 
+/* ---------------- SALES LOGGING (for share_real) ---------------- */
+app.post("/sales", isLoggedIn, async (req, res) => {
+  try {
+    const { drink_id, qty } = req.body || {};
+    const idNum = Number(drink_id);
+    const qtyNum = Number(qty ?? 1);
+    if (!Number.isInteger(idNum) || idNum <= 0) return res.status(400).json({ error: "Invalid drink_id" });
+    if (!Number.isInteger(qtyNum) || qtyNum <= 0) return res.status(400).json({ error: "Invalid qty" });
+
+    const [[exists]] = await db.query("SELECT id FROM drinks WHERE id=? LIMIT 1", [idNum]);
+    if (!exists) return res.status(404).json({ error: "Drink not found" });
+
+    await db.query("INSERT INTO sales (drink_id, qty, ts) VALUES (?, ?, NOW())", [idNum, qtyNum]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ Failed to log sale:", err);
+    res.status(500).json({ error: "Failed to log sale" });
+  }
+});
+
+/* ---------------- HEALTH ---------------- */
 app.get("/health", (_req, res) => res.status(200).send("ok"));
 
 /* ---------------- SPA FALLBACK ---------------- */
-app.get(
-  /^\/(?!simulate-buy|set-price|drinks|market|login|logout|config|health).*$/,
-  (_req, res) => {
-    res.sendFile(path.join(__dirname, "public", "index.html"));
+app.get(/^\/(?!sales|set-price|drinks|market|login|logout|config|health).*$/, (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+/* ---------------- PRICE TICK IMPLEMENTATION ---------------- */
+async function recomputeAllPrices() {
+  // 1) Unlocked drinks with params
+  const [drinks] = await db.query(`
+    SELECT id, price, min_price, max_price,
+           expected_popularity, gamma, delta_max
+    FROM drinks
+    WHERE locked = 0
+  `);
+  if (!drinks.length) return;
+
+  // 2) Sales over rolling window
+  const [[{ total_sales }]] = await db.query(
+    `SELECT COALESCE(SUM(qty),0) AS total_sales
+     FROM sales
+     WHERE ts >= NOW() - INTERVAL ? MINUTE`,
+    [SALES_WINDOW_MIN]
+  );
+  const total = Number(total_sales) || 0;
+  if (total === 0) return; // no movement without data
+
+  const [perDrink] = await db.query(
+    `SELECT drink_id, COALESCE(SUM(qty),0) AS qty
+     FROM sales
+     WHERE ts >= NOW() - INTERVAL ? MINUTE
+     GROUP BY drink_id`,
+    [SALES_WINDOW_MIN]
+  );
+  const qtyById = new Map(perDrink.map(r => [Number(r.drink_id), Number(r.qty)]));
+
+  // 3) Normalize expected shares among unlocked
+  const sumExp = drinks.reduce((s, d) => s + (Number(d.expected_popularity) || 0), 0) || 1;
+
+  // 4) Compute updates per formula (raw step -> step cap ±Δmax -> clamp [min,max])
+  const updates = [];
+  for (const d of drinks) {
+    const id = Number(d.id);
+    const Pold = Number(d.price);
+    const Pmin = Number(d.min_price);
+    const Pmax = Number(d.max_price);
+    const gamma = Number(d.gamma ?? 0.4);
+    const dmax  = Number(d.delta_max ?? 0.10);
+
+    const realShare = (Number(qtyById.get(id)) || 0) / total;
+    const expShare  = (Number(d.expected_popularity) || 0) / sumExp;
+
+    let P = Pold * (1 + gamma * (realShare - expShare));
+
+    const upCap = Pold * (1 + dmax);
+    const dnCap = Pold * (1 - dmax);
+    if (P > upCap) P = upCap;
+    if (P < dnCap) P = dnCap;
+
+    if (P < Pmin) P = Pmin;
+    if (P > Pmax) P = Pmax;
+
+    const rounded = Math.round(P * 100) / 100;
+    const points  = Math.round(rounded * 100);
+    if (rounded !== Pold) updates.push({ id, price: rounded, points });
   }
-);
+  if (!updates.length) return;
+
+  const ids = updates.map(u => u.id);
+  const casePrice = updates.map(u => `WHEN ${u.id} THEN ${u.price}`).join(' ');
+  const casePts   = updates.map(u => `WHEN ${u.id} THEN ${u.points}`).join(' ');
+  await db.query(`
+    UPDATE drinks
+    SET
+      price        = CASE id ${casePrice} END,
+      price_points = CASE id ${casePts}   END
+    WHERE id IN (${ids.join(',')})
+  `);
+}
 
 /* ---------------- START SERVER ---------------- */
 const PORT = process.env.PORT || 3000;
