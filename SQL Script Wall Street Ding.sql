@@ -1,26 +1,17 @@
+-- Make re-runs safe with FKs
+SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS;
+SET FOREIGN_KEY_CHECKS=0;
+
+-- =========================
+-- DROP (child -> parent)
+-- =========================
 DROP TABLE IF EXISTS sales;
-CREATE TABLE sales (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  drink_id INT NOT NULL,
-  qty INT NOT NULL DEFAULT 1,
-  ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_sales_drink
-    FOREIGN KEY (drink_id) REFERENCES drinks(id)
-    ON UPDATE CASCADE ON DELETE RESTRICT
-);
-
--- Helpful indexes for the rolling window queries
-CREATE INDEX idx_sales_ts ON sales(ts);
-CREATE INDEX idx_sales_drink_ts ON sales(drink_id, ts);
-
--- ================================================
---  Drop oude tabel indien nodig
--- ================================================
+DROP TABLE IF EXISTS access_passwords;
 DROP TABLE IF EXISTS drinks;
 
--- ================================================
---  Tabel definitie
--- ================================================
+-- =========================
+-- CREATE PARENT: drinks
+-- =========================
 CREATE TABLE drinks (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(100) NOT NULL,
@@ -38,7 +29,9 @@ CREATE TABLE drinks (
   gamma DECIMAL(4,2) DEFAULT 0.4
 );
 
-INSERT INTO drinks (name, price, base_price, min_price, max_price, price_points, expected_popularity, locked, is_alcoholic, delta_max, gamma) VALUES
+INSERT INTO drinks
+  (name, price, base_price, min_price, max_price, price_points, expected_popularity, locked, is_alcoholic, delta_max, gamma)
+VALUES
 ('Bier', 2.50, 2.50, 1.60, 3.00, 250, 0.55, 0, 1, 0.3, 0.4),
 ('Frisdrank', 2.20, 2.20, 1.60, 2.80, 220, 0.036, 0, 0, 0.4, 0.4),
 ('Spuitwater', 1.80, 1.80, 1.30, 2.50, 180, 0.004, 0, 0, 0.4, 0.4),
@@ -51,13 +44,31 @@ INSERT INTO drinks (name, price, base_price, min_price, max_price, price_points,
 ('Wijn', 3.50, 3.50, 2.20, 4.00, 350, 0.024, 0, 1, 0.4, 0.3),
 ('Red Bull', 3.00, 3.00, 2.80, 4.50, 300, 0.006, 0, 0, 0.4, 0.4);
 
--- =========================================
--- 5. WACHTWOORDEN
--- =========================================
-DROP TABLE IF EXISTS access_passwords;
+-- =========================
+-- CREATE access_passwords
+-- =========================
 CREATE TABLE access_passwords (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    password VARCHAR(100) NOT NULL
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  password VARCHAR(100) NOT NULL
+);
+INSERT INTO access_passwords (password) VALUES ('6666');
+
+-- =========================
+-- CREATE CHILD: sales
+-- =========================
+CREATE TABLE sales (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  drink_id INT NOT NULL,
+  qty INT NOT NULL DEFAULT 1,
+  ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_sales_drink
+    FOREIGN KEY (drink_id) REFERENCES drinks(id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
 );
 
-INSERT INTO access_passwords (password) VALUES ('6666');
+-- Helpful indexes for the rolling window queries
+CREATE INDEX idx_sales_ts ON sales(ts);
+CREATE INDEX idx_sales_drink_ts ON sales(drink_id, ts);
+
+-- Restore FK checks
+SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS;
