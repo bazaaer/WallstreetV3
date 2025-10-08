@@ -273,25 +273,18 @@ app.get(/^\/(?!sales|set-price|drinks|market|login|logout|config|health).*$/, (_
 
 /* ---------------- PRICE TICK IMPLEMENTATION ---------------- */
 async function recomputeAllPrices() {
-  // 1) Unlocked drinks with params
-  const [drinks] = await db.query(`
+  // 1) Get all drinks for processing (we'll filter by current lock state later)
+  const [allDrinks] = await db.query(`
     SELECT id, price, min_price, max_price,
            expected_popularity, gamma, delta_max, locked, lock_ts
     FROM drinks
-    WHERE locked = 0
   `);
-  if (!drinks.length) return;
-
-  // 2) Get all drinks for calculating total sales (including locked ones)
-  const [allDrinks] = await db.query(`
-    SELECT id, locked, lock_ts
-    FROM drinks
-  `);
+  if (!allDrinks.length) return;
 
   const windowStart = new Date(Date.now() - SALES_WINDOW_MIN * 60 * 1000);
 
-  // 3) Calculate total sales counting only when drinks were unlocked
-  let totalSales = 0;
+  // 2) Calculate sales counting only when drinks were unlocked
+  let totalValidSales = 0;
   const salesByDrink = new Map();
 
   for (const drink of allDrinks) {
@@ -310,22 +303,25 @@ async function recomputeAllPrices() {
     for (const sale of salesRows) {
       const saleTime = new Date(sale.ts);
       
-      // Check if drink was unlocked at the time of sale
-      let wasUnlocked = !drink.locked; // Current state
+      // Determine if drink was unlocked at the time of sale
+      let wasUnlocked = !drink.locked; // Default to current state
       
       if (drink.lock_ts) {
         const lockTime = new Date(drink.lock_ts);
         
-        // If lock timestamp is within our window, we need to check the state at sale time
+        // If there was a lock change within our window
         if (lockTime >= windowStart && lockTime <= new Date()) {
           if (saleTime < lockTime) {
-            // Sale happened before the lock change, so use opposite of current state
-            wasUnlocked = drink.locked; 
+            // Sale happened before the lock change
+            // So use the OPPOSITE of current state (what it was before)
+            wasUnlocked = drink.locked; // If currently locked, it was unlocked before
           } else {
-            // Sale happened after the lock change, so use current state
+            // Sale happened after the lock change
+            // So use current state
             wasUnlocked = !drink.locked;
           }
         }
+        // If lock_ts is outside window, use current state (already set above)
       }
       
       if (wasUnlocked) {
@@ -334,17 +330,21 @@ async function recomputeAllPrices() {
     }
     
     salesByDrink.set(drinkId, drinkSales);
-    totalSales += drinkSales;
+    totalValidSales += drinkSales;
   }
 
-  if (totalSales === 0) return; // no movement without data
+  if (totalValidSales === 0) return; // no movement without data
 
-  // 4) Normalize expected shares among unlocked drinks only
-  const sumExp = drinks.reduce((s, d) => s + (Number(d.expected_popularity) || 0), 0) || 1;
+  // 3) Filter to currently unlocked drinks for price updates
+  const unlockedDrinks = allDrinks.filter(d => !d.locked);
+  if (!unlockedDrinks.length) return;
+
+  // 4) Normalize expected shares among currently unlocked drinks only
+  const sumExp = unlockedDrinks.reduce((s, d) => s + (Number(d.expected_popularity) || 0), 0) || 1;
 
   // 5) Compute updates per formula (raw step -> step cap ±Δmax -> clamp [min,max])
   const updates = [];
-  for (const d of drinks) {
+  for (const d of unlockedDrinks) {
     const id = Number(d.id);
     const Pold = Number(d.price);
     const Pmin = Number(d.min_price);
@@ -352,7 +352,7 @@ async function recomputeAllPrices() {
     const gamma = Number(d.gamma ?? 0.4);
     const dmax  = Number(d.delta_max ?? 0.10);
 
-    const realShare = (salesByDrink.get(id) || 0) / totalSales;
+    const realShare = (salesByDrink.get(id) || 0) / totalValidSales;
     const expShare  = (Number(d.expected_popularity) || 0) / sumExp;
 
     let P = Pold * (1 + gamma * (realShare - expShare));
