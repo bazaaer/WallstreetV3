@@ -414,6 +414,41 @@ app.post("/simulate-buy/:id", isLoggedIn, async (req, res) => {
   }
 });
 
+// Log a sale (single item). Protected for now; change to public if needed.
+app.post("/sales", isLoggedIn, async (req, res) => {
+  try {
+    const { drink_id, qty } = req.body || {};
+
+    const idNum = Number(drink_id);
+    const qtyNum = Number(qty ?? 1);
+
+    if (!Number.isInteger(idNum) || idNum <= 0) {
+      return res.status(400).json({ error: "Invalid drink_id" });
+    }
+    if (!Number.isInteger(qtyNum) || qtyNum <= 0) {
+      return res.status(400).json({ error: "Invalid qty" });
+    }
+
+    // Ensure drink exists (optional but nice)
+    const [[exists]] = await db.query("SELECT id FROM drinks WHERE id=? LIMIT 1", [idNum]);
+    if (!exists) {
+      return res.status(404).json({ error: "Drink not found" });
+    }
+
+    // Insert sale (server time). No price changes here.
+    await db.query(
+      "INSERT INTO sales (drink_id, qty, ts) VALUES (?, ?, NOW())",
+      [idNum, qtyNum]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ Failed to log sale:", err);
+    res.status(500).json({ error: "Failed to log sale" });
+  }
+});
+
+
 app.post("/set-price/:id", isLoggedIn, async (req, res) => {
   const id = Number(req.params.id);
   const { price } = req.body;

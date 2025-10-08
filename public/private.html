@@ -459,17 +459,29 @@
         }
 
         try {
+          // Iterate over all order lines and log each sale
           for (const id of ids) {
-            const { qty } = currentOrder[id];
-            await fetch(`/simulate-buy/${id}?qty=${qty}`, {
+            const { drink, qty } = currentOrder[id];
+
+            const res = await fetch("/sales", {
               method: "POST",
+              headers: { "Content-Type": "application/json" },
               credentials: "include",
+              body: JSON.stringify({ drink_id: Number(id), qty: Number(qty) }),
             });
+
+            if (!res.ok) {
+              const msg = await res.text().catch(() => "");
+              throw new Error(`Sale log failed for ${drink.name}: ${msg || res.status}`);
+            }
           }
+
+          // Clear order and refresh prices UI
           resetOrder();
+          await loadDrinks();
         } catch (err) {
           console.error(err);
-          alert("Fout bij communicatie met server");
+          alert("Fout bij registreren van verkoop. Probeer opnieuw.");
         }
       }
 
