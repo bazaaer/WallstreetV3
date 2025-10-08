@@ -1,11 +1,17 @@
--- ================================================
---  Maak database (pas naam aan indien nodig)
--- ================================================
-CREATE DATABASE IF NOT EXISTS wallstreet_party
-  DEFAULT CHARACTER SET utf8mb4
-  DEFAULT COLLATE utf8mb4_unicode_ci;
+DROP TABLE IF EXISTS sales;
+CREATE TABLE sales (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  drink_id INT NOT NULL,
+  qty INT NOT NULL DEFAULT 1,
+  ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_sales_drink
+    FOREIGN KEY (drink_id) REFERENCES drinks(id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+);
 
-USE wallstreet_party;
+-- Helpful indexes for the rolling window queries
+CREATE INDEX idx_sales_ts ON sales(ts);
+CREATE INDEX idx_sales_drink_ts ON sales(drink_id, ts);
 
 -- ================================================
 --  Drop oude tabel indien nodig
@@ -44,21 +50,6 @@ INSERT INTO drinks (name, price, base_price, min_price, max_price, price_points,
 ('Baco', 5.00, 5.00, 3.30, 6.50, 500, 0.08, 0, 1, 0.4, 0.3),
 ('Wijn', 3.50, 3.50, 2.20, 4.00, 350, 0.024, 0, 1, 0.4, 0.3),
 ('Red Bull', 3.00, 3.00, 2.80, 4.50, 300, 0.006, 0, 0, 0.4, 0.4);
-
-DROP TABLE IF EXISTS sales;
-CREATE TABLE sales (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  drink_id INT NOT NULL,
-  qty INT NOT NULL DEFAULT 1,
-  ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_sales_drink
-    FOREIGN KEY (drink_id) REFERENCES drinks(id)
-    ON UPDATE CASCADE ON DELETE RESTRICT
-);
-
--- Helpful indexes for the rolling window queries
-CREATE INDEX idx_sales_ts ON sales(ts);
-CREATE INDEX idx_sales_drink_ts ON sales(drink_id, ts);
 
 -- =========================================
 -- 5. WACHTWOORDEN
