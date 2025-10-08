@@ -22,6 +22,7 @@ CREATE TABLE drinks (
   price_points INT NOT NULL,
   expected_popularity DECIMAL(6,3) NOT NULL,
   locked BOOLEAN DEFAULT 0,
+  lock_ts TIMESTAMP NULL DEFAULT NULL,
   is_alcoholic BOOLEAN DEFAULT 0,
   sold_interval INT DEFAULT 0,
   crash_next_interval BOOLEAN DEFAULT 0,
@@ -32,7 +33,7 @@ CREATE TABLE drinks (
 INSERT INTO drinks
   (name, price, base_price, min_price, max_price, price_points, expected_popularity, locked, is_alcoholic, delta_max, gamma)
 VALUES
-('Bier', 2.50, 2.50, 1.60, 3.00, 250, 0.55, 0, 1, 0.3, 0.4),
+('Bier', 2.50, 2.50, 1.60, 3.00, 250, 0.55, 1, 1, 0.3, 0.4),
 ('Frisdrank', 2.20, 2.20, 1.60, 2.80, 220, 0.036, 0, 0, 0.4, 0.4),
 ('Spuitwater', 1.80, 1.80, 1.30, 2.50, 180, 0.004, 0, 0, 0.4, 0.4),
 ('Desperados', 3.50, 3.50, 2.60, 4.50, 350, 0.03, 0, 1, 0.4, 0.3),

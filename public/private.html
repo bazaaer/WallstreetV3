@@ -172,6 +172,56 @@
         color: #ccc;
         font-size: 14px;
       }
+      #settings-container {
+        margin-top: 30px;
+        padding: 20px;
+        background: #222;
+        border-radius: 12px;
+        border: 2px solid #444;
+      }
+      #settings-toggle {
+        background: #6c757d;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 16px;
+        margin-bottom: 15px;
+      }
+      #settings-toggle:hover {
+        background: #5a6268;
+      }
+      #settings-content {
+        display: none;
+      }
+      .settings-section {
+        margin-bottom: 20px;
+      }
+      .settings-section h3 {
+        margin: 0 0 10px 0;
+        color: #fff;
+      }
+      #bier-lock-btn {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 16px;
+        font-weight: bold;
+        transition: all 0.2s;
+      }
+      #bier-lock-btn.locked {
+        background: #dc3545;
+        color: white;
+      }
+      #bier-lock-btn.unlocked {
+        background: #28a745;
+        color: white;
+      }
+      #bier-lock-btn:hover {
+        filter: brightness(1.1);
+      }
     </style>
   </head>
   <body>
@@ -209,14 +259,28 @@
           </div>
         </div>
       </div>
+      
+      <!-- SETTINGS SECTION -->
+      <div id="settings-container">
+        <button id="settings-toggle" onclick="toggleSettings()">⚙️ Instellingen</button>
+        <div id="settings-content">
+          <div class="settings-section">
+            <h3>🍺 Bier Prijsbeheer</h3>
+            <button id="bier-lock-btn" onclick="toggleBierLock()" class="locked">
+              🔒 Bier is vergrendeld (prijs verandert niet)
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script>
       let drinksCache = [];
       let currentOrder = {};
       let refreshIntervals = {};
-      const FETCH_INTERVAL = 30_000; // seconden
+      const FETCH_INTERVAL = 600_000; // 10 minutes
       let nextRefreshTime = 0;
+      let bierDrinkId = null; // Will be set when drinks are loaded
       
       const COLORS = [
         "#e74c3c",
@@ -378,6 +442,13 @@
           
           drinksCache = drinks;
 
+          // Find Bier drink ID and update lock status
+          const bierDrink = drinks.find(d => d.name.toLowerCase() === 'bier');
+          if (bierDrink) {
+            bierDrinkId = bierDrink.id;
+            updateBierLockButton(bierDrink.locked);
+          }
+
           const container = document.getElementById("drinks-container");
           container.innerHTML = "";
           drinks.forEach((d, index) => {
@@ -491,6 +562,78 @@
       function resetOrder() {
         currentOrder = {};
         renderOrder();
+      }
+
+      // ===== SETTINGS =====
+      function toggleSettings() {
+        const content = document.getElementById("settings-content");
+        const toggle = document.getElementById("settings-toggle");
+        
+        if (content.style.display === "none" || content.style.display === "") {
+          content.style.display = "block";
+          toggle.textContent = "⚙️ Instellingen verbergen";
+        } else {
+          content.style.display = "none";
+          toggle.textContent = "⚙️ Instellingen";
+        }
+      }
+
+      // ===== BIER LOCK MANAGEMENT =====
+      function updateBierLockButton(isLocked) {
+        const btn = document.getElementById("bier-lock-btn");
+        if (!btn) return;
+        
+        if (isLocked) {
+          btn.className = "locked";
+          btn.textContent = "🔒 Bier is vergrendeld (prijs verandert niet)";
+        } else {
+          btn.className = "unlocked";
+          btn.textContent = "🔓 Bier is ontgrendeld (prijs kan veranderen)";
+        }
+      }
+
+      async function toggleBierLock() {
+        if (!bierDrinkId) {
+          alert("Bier drink niet gevonden!");
+          return;
+        }
+
+        try {
+          // Get current state from cached drinks data
+          const bierDrink = drinksCache.find(d => d.id === bierDrinkId);
+          if (!bierDrink) {
+            alert("Bier drink niet gevonden!");
+            return;
+          }
+
+          const newLockedState = !bierDrink.locked;
+          
+          const res = await fetch(`/lock-drink/${bierDrinkId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ locked: newLockedState }),
+          });
+
+          if (!res.ok) {
+            const errorData = await res.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP ${res.status}`);
+          }
+
+          const result = await res.json();
+          console.log("Lock status updated:", result);
+
+          // Update local cache and UI
+          bierDrink.locked = newLockedState;
+          updateBierLockButton(newLockedState);
+          
+          // Reload drinks to get fresh data
+          await loadDrinks();
+          
+        } catch (err) {
+          console.error("Failed to toggle Bier lock:", err);
+          alert(`Fout bij wijzigen vergrendeling: ${err.message}`);
+        }
       }
     </script>
   </body>

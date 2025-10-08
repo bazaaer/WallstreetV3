@@ -6,7 +6,7 @@ const session = require("express-session");
 
 /* ---------------- PRICE ENGINE CONFIG ---------------- */
 const SALES_WINDOW_MIN = 10;     // 10-minute lookback
-const TICK_MS = 30_000;          // update every 30s
+const TICK_MS = 600_000;         // update every 10 minutes
 const TICK_LEAD_MS = 1_000;      // run ~1s before boundary so frontend sees fresh data
 
 // ---------- Helpers for schema execution ----------
@@ -225,6 +225,23 @@ app.post("/set-price/:id", isLoggedIn, async (req, res) => {
     res.status(500).json({ error: "Failed to set price" });
   }
 });
+app.post("/lock-drink/:id", isLoggedIn, async (req, res) => {
+  const id = Number(req.params.id);
+  const { locked } = req.body;
+  if (typeof locked !== "boolean") {
+    return res.status(400).json({ error: "Invalid locked value, must be boolean" });
+  }
+  try {
+    const [[drink]] = await db.query("SELECT id, name FROM drinks WHERE id=? LIMIT 1", [id]);
+    if (!drink) return res.status(404).json({ error: "Drink not found" });
+
+    await db.query("UPDATE drinks SET locked=?, lock_ts=NOW() WHERE id=?", [locked, id]);
+    res.json({ success: true, drink_id: id, locked, timestamp: new Date() });
+  } catch (err) {
+    console.error("❌ Failed to lock/unlock drink:", err);
+    res.status(500).json({ error: "Failed to update drink lock status" });
+  }
+});
 
 /* ---------------- SALES LOGGING (for share_real) ---------------- */
 app.post("/sales", isLoggedIn, async (req, res) => {
@@ -259,35 +276,73 @@ async function recomputeAllPrices() {
   // 1) Unlocked drinks with params
   const [drinks] = await db.query(`
     SELECT id, price, min_price, max_price,
-           expected_popularity, gamma, delta_max
+           expected_popularity, gamma, delta_max, locked, lock_ts
     FROM drinks
     WHERE locked = 0
   `);
   if (!drinks.length) return;
 
-  // 2) Sales over rolling window
-  const [[{ total_sales }]] = await db.query(
-    `SELECT COALESCE(SUM(qty),0) AS total_sales
-     FROM sales
-     WHERE ts >= NOW() - INTERVAL ? MINUTE`,
-    [SALES_WINDOW_MIN]
-  );
-  const total = Number(total_sales) || 0;
-  if (total === 0) return; // no movement without data
+  // 2) Get all drinks for calculating total sales (including locked ones)
+  const [allDrinks] = await db.query(`
+    SELECT id, locked, lock_ts
+    FROM drinks
+  `);
 
-  const [perDrink] = await db.query(
-    `SELECT drink_id, COALESCE(SUM(qty),0) AS qty
-     FROM sales
-     WHERE ts >= NOW() - INTERVAL ? MINUTE
-     GROUP BY drink_id`,
-    [SALES_WINDOW_MIN]
-  );
-  const qtyById = new Map(perDrink.map(r => [Number(r.drink_id), Number(r.qty)]));
+  const windowStart = new Date(Date.now() - SALES_WINDOW_MIN * 60 * 1000);
 
-  // 3) Normalize expected shares among unlocked
+  // 3) Calculate total sales counting only when drinks were unlocked
+  let totalSales = 0;
+  const salesByDrink = new Map();
+
+  for (const drink of allDrinks) {
+    const drinkId = Number(drink.id);
+    
+    // Get all sales for this drink in the window
+    const [salesRows] = await db.query(`
+      SELECT qty, ts 
+      FROM sales 
+      WHERE drink_id = ? AND ts >= ?
+      ORDER BY ts ASC
+    `, [drinkId, windowStart]);
+
+    let drinkSales = 0;
+
+    for (const sale of salesRows) {
+      const saleTime = new Date(sale.ts);
+      
+      // Check if drink was unlocked at the time of sale
+      let wasUnlocked = !drink.locked; // Current state
+      
+      if (drink.lock_ts) {
+        const lockTime = new Date(drink.lock_ts);
+        
+        // If lock timestamp is within our window, we need to check the state at sale time
+        if (lockTime >= windowStart && lockTime <= new Date()) {
+          if (saleTime < lockTime) {
+            // Sale happened before the lock change, so use opposite of current state
+            wasUnlocked = drink.locked; 
+          } else {
+            // Sale happened after the lock change, so use current state
+            wasUnlocked = !drink.locked;
+          }
+        }
+      }
+      
+      if (wasUnlocked) {
+        drinkSales += Number(sale.qty);
+      }
+    }
+    
+    salesByDrink.set(drinkId, drinkSales);
+    totalSales += drinkSales;
+  }
+
+  if (totalSales === 0) return; // no movement without data
+
+  // 4) Normalize expected shares among unlocked drinks only
   const sumExp = drinks.reduce((s, d) => s + (Number(d.expected_popularity) || 0), 0) || 1;
 
-  // 4) Compute updates per formula (raw step -> step cap ±Δmax -> clamp [min,max])
+  // 5) Compute updates per formula (raw step -> step cap ±Δmax -> clamp [min,max])
   const updates = [];
   for (const d of drinks) {
     const id = Number(d.id);
@@ -297,7 +352,7 @@ async function recomputeAllPrices() {
     const gamma = Number(d.gamma ?? 0.4);
     const dmax  = Number(d.delta_max ?? 0.10);
 
-    const realShare = (Number(qtyById.get(id)) || 0) / total;
+    const realShare = (salesByDrink.get(id) || 0) / totalSales;
     const expShare  = (Number(d.expected_popularity) || 0) / sumExp;
 
     let P = Pold * (1 + gamma * (realShare - expShare));
