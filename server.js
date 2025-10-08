@@ -1,164 +1,65 @@
 const express = require("express");
 const mysql = require("mysql2/promise");
-const fs = require("fs");
-const path = require("path");
 const session = require("express-session");
-
-// ---------- Helpers to run .sql with DELIMITER blocks ----------
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// ---------- Helpers to fix database name ----------
-function stripCreateDbAndUse(sql) {
-  return sql
-    .replace(/^\s*CREATE\s+DATABASE\b[^;]*;/gim, "")
-    .replace(/^\s*USE\b[^;]*;/gim, "");
-}
-
-// Strips "DELIMITER X" lines and converts end-of-block X to ";" so MySQL server accepts it via mysql2
-function normalizeSqlForProgrammaticExecution(sql) {
-  let currentDelimiter = ";";
-  const lines = sql.split(/\r?\n/);
-  const out = [];
-
-  for (let line of lines) {
-    const m = line.match(/^\s*DELIMITER\s+(.+)\s*$/i);
-    if (m) {
-      currentDelimiter = m[1].trim();
-      continue; // drop the DELIMITER line itself
-    }
-
-    if (currentDelimiter !== ";") {
-      const endRe = new RegExp(`${escapeRegExp(currentDelimiter)}\\s*$`);
-      if (endRe.test(line.trim())) {
-        out.push(line.replace(endRe, ";"));
-      } else {
-        out.push(line);
-      }
-    } else {
-      out.push(line);
-    }
-  }
-
-  return out.join("\n");
-}
+const path = require("path");
 
 const app = express();
 
-/* ---------------- ENV CHECKS ---------------- */
-if (!process.env.MYSQL_URL) {
-  console.error("❌ Missing MYSQL_URL env var");
-  process.exit(1);
-}
+// console.log({
+//   host: process.env.MYSQLHOST,
+//   user: process.env.MYSQLUSER,
+//   password: process.env.MYSQLPASSWORD,
+//   database: process.env.MYSQLDATABASE,
+// });
 
-/* ---------------- MIDDLEWARE ---------------- */
+
+
+
+
+
+
 app.use(express.json());
-app.set("trust proxy", 1);
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "fallbackSecret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false, httpOnly: true, sameSite: "lax" },
+  })
+);
 
-/* ---------------- MYSQL CONNECTION ---------------- */
-const { URL } = require("url");
-const u = new URL(process.env.MYSQL_URL);
+app.use(express.static(path.join(__dirname, "public")));
 
 let db;
 (async () => {
   try {
-    console.log("🔌 Attempting to connect to MySQL...");
-
-    // Step 1: raw connection (no DB selected) for schema execution
-    const rawConn = await mysql.createConnection({
-      host: u.hostname,
-      port: u.port ? Number(u.port) : 3306,
-      user: decodeURIComponent(u.username),
-      password: decodeURIComponent(u.password),
-      multipleStatements: true, // needed for executing full schema files
-    });
-
-    console.log("✅ MySQL connection established successfully");
-
-    // Step 2: optional schema construction
-    if (process.env.CONSTRUCT_DATABASE === "true") {
-    const dbName = u.pathname.replace(/^\//, "") || "railway";
-
-    console.log("⚙️ CONSTRUCT_DATABASE=true — starting schema setup...");
-    try {
-      // 2a) Ensure we’re in the DB from MYSQL_URL
-      await rawConn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\`; USE \`${dbName}\`;`);
-
-      // 2b) Load + normalize SQL (handle DELIMITER and strip CREATE/USE)
-      const sqlPath = path.join(__dirname, "SQL Script Wall Street Ding.sql");
-      let schemaSQL = fs.readFileSync(sqlPath, "utf8");
-      schemaSQL = normalizeSqlForProgrammaticExecution(schemaSQL);
-      schemaSQL = stripCreateDbAndUse(schemaSQL);
-
-      // 2c) Execute in the correct DB
-      await rawConn.query(schemaSQL);
-
-      console.log("✅ Database schema and initial data created successfully");
-    } catch (schemaErr) {
-      console.error("❌ Database setup failed during schema execution:", schemaErr.message);
-      console.error("📄 Check if the SQL file path or syntax is valid.");
-      process.exit(1);
-    }
-    } else {
-      console.log("ℹ️ CONSTRUCT_DATABASE not set — skipping schema setup");
-    }
-
-    // Step 3: app pool (select DB)
+    const mysql = require('mysql2/promise');
     db = await mysql.createPool({
-      host: u.hostname,
-      port: u.port ? Number(u.port) : 3306,
-      user: decodeURIComponent(u.username),
-      password: decodeURIComponent(u.password),
-      database: u.pathname.replace(/^\//, ""),
+      host: process.env.MYSQLHOST,
+      user: process.env.MYSQLUSER,
+      password: process.env.MYSQLPASSWORD,
+      database: process.env.MYSQLDATABASE,
+      port: Number(process.env.MYSQLPORT) || 3306,
       waitForConnections: true,
       connectionLimit: 10,
       decimalNumbers: true,
     });
 
-    console.log("✅ MySQL connection pool initialized — ready for queries");
-  } catch (connErr) {
-    console.error("❌ Failed to connect to MySQL at startup:");
-    console.error("   ↳ Host:", u.hostname);
-    console.error("   ↳ Port:", u.port || 3306);
-    console.error("   ↳ Error:", connErr.message);
-    console.error("📄 Tip: Check MYSQL_URL in Railway and ensure the DB is running.");
+    console.log("✅ Connected to MySQL Database");
+
+    const PORT = process.env.PORT || 3306;
+    app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+  } catch (err) {
+    console.error("❌ MySQL connection failed:", err);
     process.exit(1);
   }
 })();
 
-/* ---------------- SESSIONS (MySQL-backed) ---------------- */
-const MySQLStore = require("express-mysql-session")(session);
-const sessionStore = new MySQLStore({
-  host: u.hostname,
-  port: u.port ? Number(u.port) : 3306,
-  user: decodeURIComponent(u.username),
-  password: decodeURIComponent(u.password),
-  database: u.pathname.replace(/^\//, ""),
-  // createDatabaseTable: true, // default true; uncomment if needed
-});
 
-app.use(
-  session({
-    store: sessionStore,
-    secret: process.env.SESSION_SECRET || "dev-only-secret",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === "production",
-      httpOnly: true,
-      sameSite: "lax",
-    },
-  })
-);
-
-/* ---------------- FRONTEND ---------------- */
-app.use(express.static(path.join(__dirname, "public")));
-
-/* ---------------- CONFIG ---------------- */
+// ---------------- CONFIG ----------------
 const STIJGING = 5;
 
-/* ---------------- HELPERS ---------------- */
+// ---------------- HELPERS ----------------
 async function getTotalsByGroup() {
   const [rows] = await db.query(`
     SELECT is_alcoholic, COALESCE(SUM(ROUND(base_price * 100)),0) AS totaal
@@ -176,144 +77,14 @@ async function getTotalsByGroup() {
   );
 }
 
-function zeroSumUpdate(drinks, boughtId, qty = 1) {
-  let updated = drinks.map((d) => ({ ...d }));
-  const bought = updated.find((d) => d.id === boughtId);
-
-  if (!bought || bought.locked) return updated;
-
-  const group = bought.is_alcoholic;
-
-  // Bereken totaal voor deze groep (alleen unlocked drinks)
-  const unlockedInGroup = updated.filter(
-    (d) => d.is_alcoholic === group && !d.locked
-  );
-  const groupTotal = unlockedInGroup.reduce(
-    (sum, d) => sum + Math.round(d.base_price * 100),
-    0
-  );
-
-  // 📌 Stijging als percentage van base_price
-  const basePriceInCents = Math.round(bought.base_price * 100);
-  const increase = Math.round((basePriceInCents * STIJGING * qty) / 100);
-
-  // Popularity factor en modifier
-  const exp = bought.expected_popularity ?? 1;
-  const popularityFactor = 1 / (1 + (exp - 1) * 0.2);
-  const modifier = bought.modifier ?? 1;
-
-  const inc = Math.round(increase * popularityFactor * modifier);
-
-  // Pas prijs aan van gekochte drink
-  bought.price_points += inc;
-
-  // Alleen andere drankjes in dezelfde groep aanpassen
-  const others = updated.filter(
-    (d) => d.id !== boughtId && !d.locked && d.is_alcoholic === group
-  );
-
-  if (others.length > 0 && inc > 0) {
-    let share = Math.floor(inc / others.length);
-    let remainder = inc % others.length;
-
-    for (let d of others) {
-      let reduce = share + (remainder > 0 ? 1 : 0);
-      d.price_points = Math.max(0, d.price_points - reduce);
-      remainder--;
-    }
-  }
-
-  // Normaliseer TOTAAL voor deze groep
-  let currentTotal = updated
-    .filter((d) => d.is_alcoholic === group && !d.locked)
-    .reduce((sum, d) => sum + d.price_points, 0);
-
-  let adjust = groupTotal - currentTotal;
-
-  if (Math.abs(adjust) > 0) {
-    let targets = updated.filter(
-      (d) => !d.locked && d.is_alcoholic === group
-    );
-
-    if (targets.length > 0) {
-      let fix = Math.floor(adjust / targets.length);
-      let rest = adjust % targets.length;
-
-      for (let d of targets) {
-        d.price_points += fix + (rest > 0 ? 1 : 0);
-        rest--;
-      }
-    }
-  }
-
-  return updated;
-}
-
-/* ---------------- REBALANCE ---------------- */
-setInterval(async () => {
-  try {
-    const groupTotals = await getTotalsByGroup();
-
-    for (let group of [0, 1]) {
-      const [rows] = await db.query(
-        "SELECT SUM(price_points) AS totaal FROM drinks WHERE is_alcoholic=? AND locked=0",
-        [group]
-      );
-      const som = rows[0].totaal ?? 0;
-      const diff = som - groupTotals[group];
-
-      // Alleen rebalancen als het verschil significant is
-      if (Math.abs(diff) > 50) {
-        const [unlocked] = await db.query(
-          "SELECT id, price_points FROM drinks WHERE locked = 0 AND is_alcoholic=?",
-          [group]
-        );
-
-        if (unlocked.length > 0) {
-          const changePerDrink = Math.floor(Math.abs(diff) / unlocked.length);
-          let remainder = Math.abs(diff) % unlocked.length;
-
-          // Alleen rebalancen als de verandering per drink significant is
-          if (changePerDrink > 1) {
-            for (const d of unlocked) {
-              let change = changePerDrink + (remainder > 0 ? 1 : 0);
-              remainder--;
-              if (diff > 0) {
-                await db.query(
-                  "UPDATE drinks SET price_points = price_points - ? WHERE id = ?",
-                  [change, d.id]
-                );
-              } else {
-                await db.query(
-                  "UPDATE drinks SET price_points = price_points + ? WHERE id = ?",
-                  [change, d.id]
-                );
-              }
-            }
-            console.log(
-              `♻️ Rebalance uitgevoerd voor groep ${group}, som=${som}, verschil=${diff}, aanpassing=${changePerDrink} per drink`
-            );
-          } else {
-            console.log(
-              `ℹ️ Rebalance overgeslagen voor groep ${group} (te kleine aanpassing: ${changePerDrink})`
-            );
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.error("❌ Fout bij rebalance:", err);
-  }
-}, 5000);
-
-/* ---------------- AUTH ---------------- */
+// ---------------- AUTH ----------------
 function isLoggedIn(req, res, next) {
   if (!req.session.loggedIn)
     return res.status(401).json({ error: "Niet ingelogd" });
   next();
 }
 
-/* ---------------- API ---------------- */
+// ---------------- API ----------------
 app.post("/login", async (req, res) => {
   const { password } = req.body;
   try {
@@ -330,8 +101,10 @@ app.post("/login", async (req, res) => {
     res.status(500).json({ error: "DB error" });
   }
 });
+// DDSLNQLFNOEON
 
-app.get("/config", (_req, res) => {
+
+app.get("/config", (req, res) => {
   res.json({ interval: 10000 });
 });
 
@@ -342,8 +115,7 @@ app.post("/logout", (req, res) => {
   });
 });
 
-// publiek:
-app.get("/drinks", async (_req, res) => {
+app.get("/drinks", isLoggedIn, async (req, res) => {
   try {
     const [rows] = await db.query("SELECT * FROM drinks");
     res.json(rows);
@@ -352,67 +124,63 @@ app.get("/drinks", async (_req, res) => {
   }
 });
 
-
-app.post("/simulate-buy/:id", isLoggedIn, async (req, res) => {
-  const id = Number(req.params.id);
-  const qty = Number(req.query.qty || 1);
-
-  const conn = await db.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    // Lock de drinks tabel voor consistentie
-    const [drinks] = await conn.query("SELECT * FROM drinks FOR UPDATE");
-
-    // Debug logging
-    console.log(`🛒 Aankoop: drink ${id}, hoeveelheid: ${qty}`);
-    console.log(
-      `📊 Voor aankoop prijzen:`,
-      drinks.map((d) => ({
-        id: d.id,
-        name: d.name,
-        price: d.price,
-        price_points: d.price_points,
-      }))
-    );
-
-    const updated = zeroSumUpdate(drinks, id, qty);
-
-    // Update de database
-    for (const u of updated) {
-      await conn.query(
-        "UPDATE drinks SET price_points = ?, price = ? WHERE id = ?",
-        [u.price_points, u.price_points / 100, u.id]
-      );
-    }
-
-    await conn.commit();
-
-    // Debug logging na update
-    const [afterUpdate] = await conn.query(
-      "SELECT * FROM drinks WHERE id = ?",
-      [id]
-    );
-    console.log(`💰 Na aankoop:`, afterUpdate[0]);
-
-    const bought = updated.find((u) => u.id === id);
-    res.json({
-      success: true,
-      boughtPrice: bought.price_points / 100,
-      qty,
-      newPrices: updated.map((u) => ({
-        id: u.id,
-        price: u.price_points / 100,
-      })),
-    });
-  } catch (err) {
-    await conn.rollback();
-    console.error("❌ Fout bij aankoop:", err);
-    res.status(500).json({ error: "Update mislukt" });
-  } finally {
-    conn.release();
+// Helper: gets sales in the interval per drink
+async function getRecentSalesData(intervalMins = 10) {
+  const since = new Date(Date.now() - intervalMins * 60 * 1000);
+  // You'll need a "sales" table for this
+  const [rows] = await db.query(`
+    SELECT drink_id, SUM(qty) as sold
+    FROM sales
+    WHERE timestamp >= ?
+    GROUP BY drink_id
+  `, [since]);
+  
+  // Build a map: { drink_id: qty_sold }
+  const drinkSales = {};
+  let totalSold = 0;
+  for (const r of rows) {
+    drinkSales[r.drink_id] = r.sold;
+    totalSold += r.sold;
   }
-});
+  return { drinkSales, totalSold };
+}
+
+async function updatePricesInterval() {
+  const { drinkSales, totalSold } = await getRecentSalesData(10);
+
+  const [drinks] = await db.query('SELECT * FROM drinks WHERE locked = 0');
+
+  for (const drink of drinks) {
+    const realShare = (totalSold === 0) ? 0 : (drinkSales[drink.id] || 0) / totalSold;
+    const expectedShare = drink.expected_popularity;
+    const gamma = drink.gamma;
+    const deltaMax = drink.delta_max;
+    const Pold = Number(drink.price);
+    const Pmin = Number(drink.min_price);
+    const Pmax = Number(drink.max_price);
+    
+    // Compute all candidates
+    const up = Pold * (1 + Number(deltaMax));
+    const down = Pold * (1 - Number(deltaMax));
+    const gammaMod = Pold * (1 + Number(gamma) * (realShare - expectedShare));
+    let candidates = [
+      gammaMod,
+      up,
+      down
+    ];
+    // Clamp them to model
+    let newPrice = Math.min(Pmax, Math.max(Pmin, Math.min(...candidates, Math.max(up, gammaMod))));
+    newPrice = Math.max(Pmin, Math.min(newPrice, Pmax));
+    // Final update
+    await db.query('UPDATE drinks SET price=?, price_points=? WHERE id=?', [
+      newPrice, Math.round(newPrice * 100), drink.id
+    ]);
+  }
+}
+
+// Run every 60s
+setInterval(updatePricesInterval, 30000);
+
 
 app.post("/set-price/:id", isLoggedIn, async (req, res) => {
   const id = Number(req.params.id);
@@ -434,7 +202,7 @@ app.post("/set-price/:id", isLoggedIn, async (req, res) => {
   }
 });
 
-app.get("/market", async (_req, res) => {
+app.get("/market", async (req, res) => {
   try {
     const [rows] = await db.query("SELECT * FROM market_status WHERE id=1");
     res.json(rows[0] || {});
@@ -453,18 +221,27 @@ app.post("/market/crash/:state", isLoggedIn, async (req, res) => {
   }
 });
 
-app.get("/health", (_req, res) => res.status(200).send("ok"));
+// ---------------- SPA FALLBACK ----------------
+// app.get(
+//   /^\/(?!simulate-buy|set-price|drinks|market|login|logout|config).*$/,
+//   (req, res) => {
+//     res.sendFile(path.join(__dirname, "public", "index.html"));
+//   }
+// );
 
-/* ---------------- SPA FALLBACK ---------------- */
-app.get(
-  /^\/(?!simulate-buy|set-price|drinks|market|login|logout|config|health).*$/,
-  (_req, res) => {
-    res.sendFile(path.join(__dirname, "public", "index.html"));
-  }
-);
+// ---------------- SERVER START ----------------
+// const PORT = process.env.PORT || 3000;
+//app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
 
-/* ---------------- START SERVER ---------------- */
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
+console.log("__dirname:", __dirname);
+console.log("Frontend path:", path.join(__dirname, "..", "public"));
+
+// const fs = require('fs');
+// const path = require('path');
+
+app.get("/debug-files", (req, res) => {
+  fs.readdir("/app", (err, files) => {
+    if (err) return res.status(500).send(err.message);
+    res.send(`Files in /app: ${files.join(", ")}`);
+  });
 });
