@@ -1,7 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
   /* ================== CONFIG ================== */
   const API_URL = "";
-  const INTERVAL = 600_000;
+  const INTERVAL = 30_000;
   const CHART_POLL_INTERVAL = 20_000;
   const PRICE_HISTORY_WINDOW_MS = 3 * 60 * 60 * 1000;
   const PRICE_HISTORY_POINT_LIMIT = 1500;
