@@ -5,8 +5,8 @@ const path = require("path");
 const session = require("express-session");
 
 /* ---------------- PRICE ENGINE CONFIG ---------------- */
-const SALES_WINDOW_MIN = 0.5;       // 30-second lookback
-const TICK_MS = 30_000;              // update every 30s
+const SALES_WINDOW_MIN = 10;        // 10-minute lookback
+const TICK_MS = 600_000;             // update every 10 minutes
 const TICK_LEAD_MS = 1_000;          // run ~1s before boundary so frontend sees fresh data
 
 // ---------- Helpers for schema execution ----------

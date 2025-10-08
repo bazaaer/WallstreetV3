@@ -1,7 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
   /* ================== CONFIG ================== */
   const API_URL = ""; // e.g. "/api" or "" for relative
-  const INTERVAL = 30_000;
+  const INTERVAL = 600_000;
   const FETCH_INTERVAL = 10_000; // ms
   const CHART_POLL_INTERVAL = 2_000; // ms
   const CYCLE_INTERVAL = 8_000; // ms
