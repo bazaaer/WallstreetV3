@@ -18,34 +18,32 @@ DROP TABLE IF EXISTS drinks;
 CREATE TABLE drinks (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(100) NOT NULL,
-  price DECIMAL(6,2) NOT NULL,         -- huidige prijs
-  base_price DECIMAL(6,2) NOT NULL,    -- startprijs
-  min_price DECIMAL(6,2) NOT NULL,     -- ondergrens
-  max_price DECIMAL(6,2) NOT NULL,     -- bovengrens
-  price_points INT NOT NULL,           -- bv. 1.30 → 130
-  expected_popularity DECIMAL(6,2) NOT NULL,-- percentage verwachting
-  locked BOOLEAN DEFAULT 0,            -- 1 = vastgezet
-  is_alcoholic BOOLEAN DEFAULT 0,       -- 1 = alcoholisch, 0 = niet-alcoholisch
+  price DECIMAL(6,2) NOT NULL,
+  base_price DECIMAL(6,2) NOT NULL,
+  min_price DECIMAL(6,2) NOT NULL,
+  max_price DECIMAL(6,2) NOT NULL,
+  price_points INT NOT NULL,
+  expected_popularity DECIMAL(6,3) NOT NULL,
+  locked BOOLEAN DEFAULT 0,
+  is_alcoholic BOOLEAN DEFAULT 0,
   sold_interval INT DEFAULT 0,
-  crash_next_interval BOOLEAN DEFAULT 0
+  crash_next_interval BOOLEAN DEFAULT 0,
+  delta_max DECIMAL(4,2) DEFAULT 0.4,
+  gamma DECIMAL(4,2) DEFAULT 0.4
 );
 
--- ================================================
---  Initiele data
--- ================================================
-INSERT INTO drinks (name, price, base_price, min_price, max_price, price_points, expected_popularity, locked, is_alcoholic) VALUES
-/*('Plat water', 1.30, 1.30, 1.30, 1.30, 130, 0.00, 1, 0),*/
-('Bier', 2.50, 2.50, 2.00, 3.50, 250, 2, 0, 1),
-('Wijn', 3.50, 3.50, 3.00, 5.00, 350, 1, 0, 1),
-('Desperado’s', 3.50, 3.50, 2.60, 4.50, 350, 1, 0, 1),
-('Kasteelbier Rouge', 3.50, 3.50, 2.50, 4.50, 350, 1, 0, 1),
-('Vodka Red Bull', 6.00, 6.00, 4.20, 7.50, 600, 1, 0, 1),
-('Vodka Fanta/Sprite', 5.00, 5.00, 3.70, 6.50, 500, 1, 0, 1),
-('Baco', 5.00, 5.00, 3.30, 6.50, 500, 1, 0, 1),
-('Gin Tonic', 5.00, 5.00, 3.50, 6.50, 500, 1, 0, 1),
-('Red Bull', 3.00, 3.00, 2.50, 4.00, 300, 1, 0, 0),
-('Bruiswater', 1.80, 1.80, 1.30, 2.50, 180, 1, 0, 0),
-('frisdrank',2.20,2.20,1.60,2.80,1,0,0);
+INSERT INTO drinks (name, price, base_price, min_price, max_price, price_points, expected_popularity, locked, is_alcoholic, delta_max, gamma) VALUES
+('Bier', 2.50, 2.50, 1.60, 3.00, 250, 0.55, 0, 1, 0.3, 0.4),
+('Frisdrank', 2.20, 2.20, 1.60, 2.80, 220, 0.036, 0, 0, 0.4, 0.4),
+('Spuitwater', 1.80, 1.80, 1.30, 2.50, 180, 0.004, 0, 0, 0.4, 0.4),
+('Desperados', 3.50, 3.50, 2.60, 4.50, 350, 0.03, 0, 1, 0.4, 0.3),
+('Rouge', 4.50, 4.50, 4.50, 4.50, 450, 0.11, 0, 1, 0.4, 0.3),
+('Vodka Redbull', 6.00, 6.00, 4.20, 7.50, 600, 0.08, 0, 1, 0.4, 0.3),
+('Vodka Fris', 5.00, 5.00, 3.70, 6.50, 500, 0.04, 0, 1, 0.4, 0.3),
+('Gintonic', 6.50, 6.50, 6.50, 6.50, 650, 0.04, 0, 1, 0.4, 0.3),
+('Baco', 5.00, 5.00, 3.30, 6.50, 500, 0.08, 0, 1, 0.4, 0.3),
+('Wijn', 3.50, 3.50, 2.20, 4.00, 350, 0.024, 0, 1, 0.4, 0.3),
+('Red Bull', 3.00, 3.00, 2.80, 4.50, 300, 0.006, 0, 0, 0.4, 0.4);
 
 
 -- =========================================
